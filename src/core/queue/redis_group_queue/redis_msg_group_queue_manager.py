@@ -1131,6 +1131,8 @@ class RedisGroupQueueManager:
         """
         try:
             await self._ensure_scripts_loaded()
+            if not self.enable_metrics and include_partition_details:
+                include_partition_details = False
 
             # If group_key is specified, return specific queue statistics
             if group_key is not None and not include_all_partitions:
@@ -1355,21 +1357,23 @@ class RedisGroupQueueManager:
             )
 
         # Execute log immediately on startup
-        try:
-            await self._log_manager_details()
-            logger.info(
-                "🔥 RedisGroupQueueManager[%s] Startup log printing completed",
-                self.key_prefix,
-            )
-        except (redis.RedisError, ValueError, TypeError) as e:
-            logger.warning(
-                "⚠️ RedisGroupQueueManager[%s] Startup log printing failed: %s",
-                self.key_prefix,
-                e,
-            )
+        if self.enable_metrics:
+            try:
+                await self._log_manager_details()
+                logger.info(
+                    "🔥 RedisGroupQueueManager[%s] Startup log printing completed",
+                    self.key_prefix,
+                )
+            except (redis.RedisError, ValueError, TypeError) as e:
+                logger.warning(
+                    "⚠️ RedisGroupQueueManager[%s] Startup log printing failed: %s",
+                    self.key_prefix,
+                    e,
+                )
 
         # Start periodic tasks
-        self._log_task = asyncio.create_task(self._periodic_log_worker())
+        if self.enable_metrics:
+            self._log_task = asyncio.create_task(self._periodic_log_worker())
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup_worker())
 
         logger.info(
@@ -1405,6 +1409,8 @@ class RedisGroupQueueManager:
 
     async def _periodic_log_worker(self):
         """Periodic log printing worker coroutine"""
+        if not self.enable_metrics:
+            return
         try:
             while self._running:
                 await asyncio.sleep(self.log_interval_seconds)
@@ -1446,6 +1452,8 @@ class RedisGroupQueueManager:
 
     async def _log_manager_details(self):
         """Print manager details"""
+        if not self.enable_metrics:
+            return
         try:
             manager_stats = await self.get_manager_stats()
 

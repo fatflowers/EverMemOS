@@ -1207,17 +1207,23 @@ class RedisGroupQueueManager:
 
                     # Get partition assignments
                     partition_assignments = {}
-                    for owner in active_owners:
-                        queue_list_key = f"{self.queue_list_prefix}{owner}"
-                        assigned_partitions_raw = await self.redis_client.lrange(
-                            queue_list_key, 0, -1
-                        )
-                        # Safely decode partition list
-                        assigned_partitions = [
-                            self._safe_decode_redis_value(p)
-                            for p in assigned_partitions_raw
-                        ]
-                        partition_assignments[owner] = assigned_partitions
+                    queue_list_keys = [
+                        f"{self.queue_list_prefix}{owner}" for owner in active_owners
+                    ]
+                    if queue_list_keys:
+                        pipeline = self.redis_client.pipeline()
+                        for queue_list_key in queue_list_keys:
+                            pipeline.lrange(queue_list_key, 0, -1)
+                        assigned_partitions_raw_list = await pipeline.execute()
+                        for owner, assigned_partitions_raw in zip(
+                            active_owners, assigned_partitions_raw_list
+                        ):
+                            # Safely decode partition list
+                            assigned_partitions = [
+                                self._safe_decode_redis_value(p)
+                                for p in assigned_partitions_raw
+                            ]
+                            partition_assignments[owner] = assigned_partitions
                     stats["partition_assignments"] = partition_assignments
 
                 except (redis.RedisError, ValueError, TypeError) as e:

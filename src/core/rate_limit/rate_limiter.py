@@ -4,16 +4,37 @@ Async rate limiting decorator module based on aiolimiter
 Provides rate limiting functionality for async functions with flexible configuration.
 """
 
+from collections import OrderedDict
 from functools import wraps
-from typing import Callable, Any, Dict, Optional
+import time
+from typing import Callable, Any, Optional
 from aiolimiter import AsyncLimiter
 
 
 class RateLimitManager:
     """Rate limit manager that manages multiple limiter instances"""
 
-    def __init__(self):
-        self._limiters: Dict[str, AsyncLimiter] = {}
+    def __init__(self, max_size: int = 1024, ttl_seconds: Optional[float] = None):
+        if max_size <= 0:
+            raise ValueError(f"max_size must be positive, got {max_size}")
+        self._limiters: "OrderedDict[str, tuple[AsyncLimiter, float]]" = OrderedDict()
+        self._max_size = max_size
+        self._ttl_seconds = ttl_seconds
+
+    def _purge_expired(self, now: float) -> None:
+        if self._ttl_seconds is None:
+            return
+        expired_keys = [
+            key
+            for key, (_, last_used) in self._limiters.items()
+            if now - last_used >= self._ttl_seconds
+        ]
+        for key in expired_keys:
+            self._limiters.pop(key, None)
+
+    def _evict_overflow(self) -> None:
+        while len(self._limiters) > self._max_size:
+            self._limiters.popitem(last=False)
 
     def get_limiter(self, key: str, max_rate: int, time_period: int) -> AsyncLimiter:
         """
@@ -28,11 +49,21 @@ class RateLimitManager:
             AsyncLimiter: Limiter instance
         """
         limiter_key = f"{key}_{max_rate}_{time_period}"
+        now = time.monotonic()
 
-        if limiter_key not in self._limiters:
-            self._limiters[limiter_key] = AsyncLimiter(max_rate, time_period)
+        self._purge_expired(now)
 
-        return self._limiters[limiter_key]
+        if limiter_key in self._limiters:
+            limiter, _ = self._limiters[limiter_key]
+            self._limiters[limiter_key] = (limiter, now)
+            self._limiters.move_to_end(limiter_key)
+            return limiter
+
+        limiter = AsyncLimiter(max_rate, time_period)
+        self._limiters[limiter_key] = (limiter, now)
+        self._limiters.move_to_end(limiter_key)
+        self._evict_overflow()
+        return limiter
 
 
 # Global rate limit manager instance
